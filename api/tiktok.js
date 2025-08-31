@@ -1,6 +1,6 @@
 // api/tiktok.js
 import chromium from "@sparticuz/chromium";
-import playwright from "playwright-core";
+import puppeteer from "puppeteer-core";
 
 export default async function handler(req, res) {
   const videoUrl = req.query.url;
@@ -11,24 +11,18 @@ export default async function handler(req, res) {
 
   let browser;
   try {
-    const executablePath = await chromium.executablePath(); // путь к бинарю для лямбды
-    browser = await playwright.chromium.launch({
+    const executablePath = await chromium.executablePath();
+
+    browser = await puppeteer.launch({
       args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
       executablePath,
-      headless: true
+      headless: chromium.headless,
     });
 
-    const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      locale: "en-US"
-    });
-
-    const page = await context.newPage();
+    const page = await browser.newPage();
     await page.goto(videoUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-    // ждём, пока страница подгрузит JSON
     await page.waitForSelector("#SIGI_STATE", { timeout: 15000 });
 
     const views = await page.evaluate(() => {
