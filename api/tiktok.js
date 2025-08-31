@@ -1,35 +1,53 @@
 // api/tiktok.js
-export default async function handler(req, res) {
-  try {
-    const url = req.query.url;
-    if (!url) return res.status(400).json({ error: "Missing url" });
+import chromium from "@sparticuz/chromium";
+import playwright from "playwright-core";
 
-    // Запросим TikTok «как обычный браузер»
-    const r = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Referer": "https://www.tiktok.com/"
+export default async function handler(req, res) {
+  const videoUrl = req.query.url;
+  if (!videoUrl) {
+    res.status(400).json({ error: "Missing url" });
+    return;
+  }
+
+  let browser;
+  try {
+    const executablePath = await chromium.executablePath(); // путь к бинарю для лямбды
+    browser = await playwright.chromium.launch({
+      args: chromium.args,
+      executablePath,
+      headless: true
+    });
+
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      locale: "en-US"
+    });
+
+    const page = await context.newPage();
+    await page.goto(videoUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
+
+    // ждём, пока страница подгрузит JSON
+    await page.waitForSelector("#SIGI_STATE", { timeout: 15000 });
+
+    const views = await page.evaluate(() => {
+      try {
+        const s = document.querySelector("#SIGI_STATE");
+        const data = JSON.parse(s.textContent);
+        const item = Object.values(data.ItemModule || {})[0];
+        return item?.stats?.playCount ?? null;
+      } catch (e) {
+        return null;
       }
     });
-    const html = await r.text();
 
-    // Достаём JSON из <script id="SIGI_STATE">...</script>
-    const m = html.match(/<script id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/);
-    if (!m) {
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      return res.status(200).json({ views: null, hint: "SIGI not found" });
-    }
+    await browser.close();
 
-    const data = JSON.parse(m[1]);
-    const item = Object.values(data?.ItemModule || {})[0];
-    const views = item?.stats?.playCount ?? null;
-
-    res.setHeader("Access-Control-Allow-Origin", "*"); // чтобы Google Sheets не ругался на CORS
-    return res.status(200).json({ views });
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.status(200).json({ views });
   } catch (e) {
-    return res.status(500).json({ error: e.message });
+    if (browser) try { await browser.close(); } catch {}
+    res.status(500).json({ error: e.message });
   }
 }
